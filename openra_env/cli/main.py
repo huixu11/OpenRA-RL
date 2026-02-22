@@ -67,6 +67,43 @@ def main() -> None:
     watch_parser = replay_sub.add_parser("watch", help="Watch a replay in your browser (via VNC)")
     watch_parser.add_argument("file", nargs="?", default=None, help="Replay file (local path or container path; default: latest)")
     watch_parser.add_argument("--port", type=int, default=6080, help="noVNC port (default: 6080)")
+    watch_parser.add_argument(
+        "--resolution",
+        default=None,
+        help="Replay viewer resolution WxH, e.g. 1280x720 "
+             "(env: OPENRA_RL_REPLAY_RESOLUTION, default: 960x540)",
+    )
+    watch_parser.add_argument(
+        "--fps",
+        type=int,
+        default=None,
+        help="Replay render FPS cap (env: OPENRA_RL_REPLAY_MAX_FPS, default: 2)",
+    )
+    watch_parser.add_argument(
+        "--ui-scale",
+        type=float,
+        default=None,
+        help="OpenRA UI scale (env: OPENRA_RL_REPLAY_UI_SCALE, default: 0.75)",
+    )
+    watch_parser.add_argument(
+        "--vnc-quality",
+        type=int,
+        default=None,
+        help="noVNC quality 0-9 (env: OPENRA_RL_REPLAY_VNC_QUALITY, default: 8)",
+    )
+    watch_parser.add_argument(
+        "--vnc-compression",
+        type=int,
+        default=None,
+        help="noVNC compression 0-9 (env: OPENRA_RL_REPLAY_VNC_COMPRESSION, default: 4)",
+    )
+    watch_parser.add_argument(
+        "--render",
+        dest="render_mode",
+        choices=["auto", "gpu", "cpu"],
+        default=None,
+        help="Replay render backend preference (env: OPENRA_RL_REPLAY_RENDER, default: auto)",
+    )
 
     replay_sub.add_parser("list", help="List available replays")
     replay_sub.add_parser("copy", help="Copy replays from Docker to ~/.openra-rl/replays/")
@@ -124,7 +161,16 @@ def main() -> None:
             server_parser.print_help()
     elif args.command == "replay":
         if args.replay_command == "watch":
-            commands.cmd_replay_watch(file=args.file, port=args.port)
+            commands.cmd_replay_watch(
+                file=args.file,
+                port=args.port,
+                resolution=args.resolution,
+                fps=args.fps,
+                ui_scale=args.ui_scale,
+                vnc_quality=args.vnc_quality,
+                vnc_compression=args.vnc_compression,
+                render_mode=args.render_mode,
+            )
         elif args.replay_command == "list":
             commands.cmd_replay_list()
         elif args.replay_command == "copy":

@@ -6,10 +6,11 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from openra_env.cli.console import error, info, step, success
+from openra_env.cli.console import error, info, step, success, warn
 
 IMAGE_REPO = "ghcr.io/yxc20089/openra-rl"
 IMAGE = f"{IMAGE_REPO}:latest"
@@ -254,6 +255,151 @@ def server_status() -> Optional[dict]:
 # ── Replay viewer ────────────────────────────────────────────────────
 
 
+@dataclass(frozen=True)
+class ReplayViewerSettings:
+    """Tunable replay viewer settings for quality/speed tradeoffs."""
+    width: int
+    height: int
+    xvfb_depth: int
+    ui_scale: float
+    max_fps: int
+    vnc_quality: int
+    vnc_compression: int
+    viewport_distance: str
+    mute: bool
+    render_mode: str
+
+
+def _parse_int_setting(name: str, value: str, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be an integer, got: {value!r}") from None
+    if parsed < minimum or parsed > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}, got: {parsed}")
+    return parsed
+
+
+def _parse_float_setting(name: str, value: str, minimum: float, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a number, got: {value!r}") from None
+    if parsed < minimum or parsed > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}, got: {parsed}")
+    return parsed
+
+
+def _parse_bool_setting(name: str, value: str) -> bool:
+    value_norm = str(value).strip().lower()
+    if value_norm in ("1", "true", "yes", "on"):
+        return True
+    if value_norm in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(f"{name} must be true/false, got: {value!r}")
+
+
+def _parse_resolution(value: str) -> tuple[int, int]:
+    raw = value.strip().lower().replace(" ", "")
+    if "x" in raw:
+        left, right = raw.split("x", 1)
+    elif "," in raw:
+        left, right = raw.split(",", 1)
+    else:
+        raise ValueError(f"resolution must be WxH (e.g. 960x540), got: {value!r}")
+    width = _parse_int_setting("resolution width", left, 320, 7680)
+    height = _parse_int_setting("resolution height", right, 240, 4320)
+    return width, height
+
+
+def _normalize_viewport_distance(value: str) -> str:
+    mapping = {
+        "close": "Close",
+        "medium": "Medium",
+        "far": "Far",
+    }
+    key = value.strip().lower()
+    if key not in mapping:
+        raise ValueError(f"viewport distance must be one of close/medium/far, got: {value!r}")
+    return mapping[key]
+
+
+def _normalize_render_mode(value: str) -> str:
+    mode = value.strip().lower()
+    if mode not in ("auto", "gpu", "cpu"):
+        raise ValueError(f"render mode must be one of auto/gpu/cpu, got: {value!r}")
+    return mode
+
+
+def load_replay_viewer_settings(
+    resolution: Optional[str] = None,
+    max_fps: Optional[int] = None,
+    ui_scale: Optional[float] = None,
+    vnc_quality: Optional[int] = None,
+    vnc_compression: Optional[int] = None,
+    render_mode: Optional[str] = None,
+) -> ReplayViewerSettings:
+    """Load replay viewer settings from CLI overrides and environment variables."""
+    env = os.environ
+
+    resolution_value = resolution or env.get("OPENRA_RL_REPLAY_RESOLUTION", "960x540")
+    width, height = _parse_resolution(resolution_value)
+
+    fps_value = _parse_int_setting(
+        "fps",
+        str(max_fps) if max_fps is not None else env.get("OPENRA_RL_REPLAY_MAX_FPS", "2"),
+        1,
+        120,
+    )
+    ui_scale_value = _parse_float_setting(
+        "ui-scale",
+        str(ui_scale) if ui_scale is not None else env.get("OPENRA_RL_REPLAY_UI_SCALE", "0.75"),
+        0.5,
+        3.0,
+    )
+    vnc_quality_value = _parse_int_setting(
+        "vnc-quality",
+        str(vnc_quality) if vnc_quality is not None else env.get("OPENRA_RL_REPLAY_VNC_QUALITY", "8"),
+        0,
+        9,
+    )
+    vnc_compression_value = _parse_int_setting(
+        "vnc-compression",
+        str(vnc_compression) if vnc_compression is not None else env.get("OPENRA_RL_REPLAY_VNC_COMPRESSION", "4"),
+        0,
+        9,
+    )
+    render_mode_value = _normalize_render_mode(
+        render_mode if render_mode is not None else env.get("OPENRA_RL_REPLAY_RENDER", "auto")
+    )
+    viewport_distance_value = _normalize_viewport_distance(
+        env.get("OPENRA_RL_REPLAY_VIEWPORT_DISTANCE", "close")
+    )
+    xvfb_depth_value = _parse_int_setting(
+        "OPENRA_RL_REPLAY_XVFB_DEPTH",
+        env.get("OPENRA_RL_REPLAY_XVFB_DEPTH", "24"),
+        16,
+        32,
+    )
+    mute_value = _parse_bool_setting(
+        "OPENRA_RL_REPLAY_MUTE",
+        env.get("OPENRA_RL_REPLAY_MUTE", "true"),
+    )
+
+    return ReplayViewerSettings(
+        width=width,
+        height=height,
+        xvfb_depth=xvfb_depth_value,
+        ui_scale=ui_scale_value,
+        max_fps=fps_value,
+        vnc_quality=vnc_quality_value,
+        vnc_compression=vnc_compression_value,
+        viewport_distance=viewport_distance_value,
+        mute=mute_value,
+        render_mode=render_mode_value,
+    )
+
+
 def list_replays() -> list[str]:
     """List .orarep files inside the game server container."""
     if not is_running():
@@ -327,17 +473,242 @@ def is_replay_viewer_running() -> bool:
     return REPLAY_CONTAINER in result.stdout
 
 
-def start_replay_viewer(replay_path: str, port: int = 6080, version: Optional[str] = None) -> bool:
+def replay_viewer_exists() -> bool:
+    """Check if the replay viewer container exists (running or exited)."""
+    result = _run([
+        "docker", "ps", "-a", "--filter", f"name={REPLAY_CONTAINER}",
+        "--format", "{{.Names}}"
+    ])
+    return REPLAY_CONTAINER in result.stdout
+
+
+def get_replay_viewer_logs(tail: int = 200) -> str:
+    """Return replay viewer logs, or an empty string if unavailable."""
+    if not replay_viewer_exists():
+        return ""
+    result = _run(["docker", "logs", "--tail", str(tail), REPLAY_CONTAINER])
+    if result.returncode != 0:
+        return result.stderr.strip() or result.stdout.strip()
+    return result.stdout.strip()
+
+
+def _is_missing_entrypoint_error(stderr: str, entrypoint: str) -> bool:
+    """Return True if docker run failed because the entrypoint path does not exist."""
+    s = stderr.lower()
+    ep = entrypoint.lower()
+    if ep not in s:
+        return False
+    missing_markers = (
+        "no such file or directory",
+        "executable file not found",
+        "stat",
+    )
+    return any(marker in s for marker in missing_markers)
+
+
+def _is_name_conflict_error(stderr: str, container_name: str) -> bool:
+    """Return True if docker run failed because the container name is already in use."""
+    s = stderr.lower()
+    return (
+        "conflict" in s
+        and "already in use" in s
+        and container_name.lower() in s
+    )
+
+
+def _render_variants(mode: str) -> list[tuple[str, list[str]]]:
+    """Return docker run argument variants for replay rendering backend selection."""
+    mode = _normalize_render_mode(mode)
+    cpu = ("cpu", ["-e", "LIBGL_ALWAYS_SOFTWARE=1"])
+    gpu_variants = [
+        ("gpu-nvidia", ["--gpus", "all", "-e", "LIBGL_ALWAYS_SOFTWARE=0"]),
+        ("gpu-dxg", ["--device", "/dev/dxg:/dev/dxg", "-e", "LIBGL_ALWAYS_SOFTWARE=0"]),
+        ("gpu-dri", ["--device", "/dev/dri:/dev/dri", "-e", "LIBGL_ALWAYS_SOFTWARE=0"]),
+    ]
+    if mode == "cpu":
+        return [cpu]
+    if mode == "gpu":
+        return gpu_variants
+    return [*gpu_variants, cpu]
+
+
+def _run_replay_container(
+    pre_image_cmd: list[str],
+    image_and_args: list[str],
+    render_mode: str,
+) -> tuple[subprocess.CompletedProcess, str]:
+    """Run replay container using GPU variants first, then CPU fallback."""
+    last_result: Optional[subprocess.CompletedProcess] = None
+    last_mode = "unknown"
+    for mode_label, render_args in _render_variants(render_mode):
+        cmd = [*pre_image_cmd, *render_args, *image_and_args]
+        # Retry each render variant once after cleaning up stale-name conflicts.
+        for attempt in range(2):
+            result = _run(cmd)
+            last_result = result
+            last_mode = mode_label
+            if result.returncode == 0:
+                return result, mode_label
+
+            stderr = result.stderr.strip()
+            # Failed starts can still leave an exited container with reserved name.
+            _run(["docker", "rm", "-f", REPLAY_CONTAINER])
+
+            if _is_name_conflict_error(stderr, REPLAY_CONTAINER) and attempt == 0:
+                continue
+
+            break
+    # Should never be None because at least one variant always exists.
+    assert last_result is not None
+    return last_result, last_mode
+
+
+def _common_replay_env_args(settings: ReplayViewerSettings) -> list[str]:
+    """Common docker env args for replay viewer startup."""
+    mute_str = "true" if settings.mute else "false"
+    return [
+        "-e", "SDL_AUDIODRIVER=dummy",
+        "-e", "OPENRA_DISPLAY_SCALE=1",
+        "-e", "vblank_mode=0",
+        "-e", f"OPENRA_RL_REPLAY_RESOLUTION={settings.width}x{settings.height}",
+        "-e", f"OPENRA_RL_REPLAY_XVFB_DEPTH={settings.xvfb_depth}",
+        "-e", f"OPENRA_RL_REPLAY_UI_SCALE={settings.ui_scale}",
+        "-e", f"OPENRA_RL_REPLAY_MAX_FPS={settings.max_fps}",
+        "-e", f"OPENRA_RL_REPLAY_VIEWPORT_DISTANCE={settings.viewport_distance}",
+        "-e", f"OPENRA_RL_REPLAY_MUTE={mute_str}",
+    ]
+
+
+def _start_replay_viewer_inline(
+    image: str,
+    container_replay_path: str,
+    port: int,
+    local_file: Optional[str],
+    settings: ReplayViewerSettings,
+) -> tuple[subprocess.CompletedProcess, str]:
+    """Start replay viewer with an inline script (independent from image entrypoint layout)."""
+    ui_scale_str = f"{settings.ui_scale:.3f}".rstrip("0").rstrip(".")
+    mute_str = "True" if settings.mute else "False"
+    inline_script = f"""
+set -e
+REPLAY_FILE="$1"
+if [ -z "$REPLAY_FILE" ]; then
+    echo "Usage: replay viewer <replay_file_path>"
+    exit 1
+fi
+if [ ! -f "$REPLAY_FILE" ]; then
+    echo "ERROR: Replay file not found: $REPLAY_FILE"
+    exit 1
+fi
+
+REPLAY_DIR="/root/.config/openra/Replays/ra/{{DEV_VERSION}}"
+mkdir -p "$REPLAY_DIR"
+REPLAY_BASENAME=$(basename "$REPLAY_FILE")
+cp "$REPLAY_FILE" "$REPLAY_DIR/$REPLAY_BASENAME"
+REPLAY_PATH="$REPLAY_DIR/$REPLAY_BASENAME"
+
+Xvfb :99 -screen 0 {settings.width}x{settings.height}x{settings.xvfb_depth} -ac +extension GLX +render -noreset &
+XVFB_PID=$!
+sleep 2
+if ! kill -0 "$XVFB_PID" 2>/dev/null; then
+    echo "ERROR: Xvfb failed to start"
+    exit 1
+fi
+export DISPLAY=:99
+
+x11vnc -display :99 -forever -nopw -shared -rfbport 5900 -noxdamage -wait 50 -defer 50 -quiet &
+VNC_PID=$!
+sleep 1
+
+NOVNC_WEB=/usr/share/novnc
+if [ ! -d "$NOVNC_WEB" ]; then
+    NOVNC_WEB=/usr/local/share/novnc
+fi
+websockify --web "$NOVNC_WEB" 6080 localhost:5900 &
+NOVNC_PID=$!
+
+if [ -f /opt/openra/bin/OpenRA.dll ]; then
+    OPENRA_DLL=/opt/openra/bin/OpenRA.dll
+    OPENRA_DIR=/opt/openra
+elif [ -f /openra/bin/OpenRA.dll ]; then
+    OPENRA_DLL=/openra/bin/OpenRA.dll
+    OPENRA_DIR=/openra
+elif [ -f /app/OpenRA.dll ]; then
+    OPENRA_DLL=/app/OpenRA.dll
+    OPENRA_DIR=/app
+else
+    echo "ERROR: OpenRA.dll not found in known locations."
+    exit 1
+fi
+
+cleanup() {{
+    kill "$NOVNC_PID" 2>/dev/null || true
+    kill "$VNC_PID" 2>/dev/null || true
+    kill "$XVFB_PID" 2>/dev/null || true
+    wait 2>/dev/null || true
+}}
+trap cleanup TERM INT
+
+exec dotnet "$OPENRA_DLL" \
+    Engine.EngineDir="$OPENRA_DIR" \
+    Game.Mod=ra \
+    Game.Platform=Default \
+    Graphics.Mode=Windowed \
+    Graphics.WindowedSize={settings.width},{settings.height} \
+    Graphics.UIScale={ui_scale_str} \
+    Graphics.VSync=False \
+    Graphics.CapFramerate=True \
+    Graphics.MaxFramerate={settings.max_fps} \
+    Graphics.DisableGLDebugMessageCallback=True \
+    Graphics.ViewportDistance={settings.viewport_distance} \
+    Sound.Mute={mute_str} \
+    "Launch.Replay=$REPLAY_PATH"
+""".strip()
+
+    pre_image_cmd = [
+        "docker", "run", "-d",
+        "-p", f"{port}:6080",
+        "--name", REPLAY_CONTAINER,
+        "--entrypoint", "/bin/sh",
+    ]
+    pre_image_cmd.extend(_common_replay_env_args(settings))
+
+    if local_file:
+        pre_image_cmd.extend(["-v", f"{local_file}:{container_replay_path}:ro"])
+    elif is_running():
+        pre_image_cmd.extend(["--volumes-from", CONTAINER_NAME])
+
+    image_and_args = [image, "-c", inline_script, "openra-replay-inline", container_replay_path]
+    return _run_replay_container(pre_image_cmd, image_and_args, settings.render_mode)
+
+
+def start_replay_viewer(
+    replay_path: str,
+    port: int = 6080,
+    version: Optional[str] = None,
+    settings: Optional[ReplayViewerSettings] = None,
+    _refreshed_latest: bool = False,
+) -> bool:
     """Start the replay viewer container.
 
     Args:
         replay_path: Path to .orarep file (container path or local path).
         port: noVNC port to expose (default 6080).
         version: Docker image version to use (default: auto-detect from manifest).
+        settings: Replay viewer tuning knobs (resolution/fps/vnc/render mode).
     """
+    if settings is None:
+        settings = load_replay_viewer_settings()
+
     if is_replay_viewer_running():
         error("Replay viewer is already running. Stop it first with: openra-rl replay stop")
         return False
+    if replay_viewer_exists():
+        step("Removing stale replay viewer container...")
+        remove = _run(["docker", "rm", "-f", REPLAY_CONTAINER])
+        if remove.returncode != 0:
+            error(f"Failed to remove stale replay viewer container: {remove.stderr.strip()}")
+            return False
 
     # Auto-detect version from manifest if not specified
     if version is None:
@@ -363,44 +734,180 @@ def start_replay_viewer(replay_path: str, port: int = 6080, version: Optional[st
     if local_path.exists():
         local_file = str(local_path)
         container_replay_path = f"/tmp/replay/{local_path.name}"
+    elif replay_path.startswith("/") and is_running():
+        # Prefer copying replay to host and bind-mounting it.
+        # `--volumes-from` only shares named volumes, not container writable layers.
+        filename = os.path.basename(replay_path)
+        LOCAL_REPLAY_DIR.mkdir(parents=True, exist_ok=True)
+        local_copy = LOCAL_REPLAY_DIR / filename
+        copy_result = _run([
+            "docker", "cp",
+            f"{CONTAINER_NAME}:{replay_path}",
+            str(local_copy),
+        ])
+        if copy_result.returncode == 0:
+            local_file = str(local_copy.resolve())
+            container_replay_path = f"/tmp/replay/{filename}"
+            info(f"Copied replay from server container: {filename}")
+        else:
+            warn(
+                "Could not copy replay from server container; "
+                "trying container path fallback."
+            )
     elif not replay_path.startswith("/"):
         error(f"Replay file not found: {local_path}")
         return False
 
     step(f"Starting replay viewer on port {port} ({image})...")
 
-    cmd = [
-        "docker", "run", "--rm", "-d",
-        "-p", f"{port}:6080",
-        "--name", REPLAY_CONTAINER,
-        "--entrypoint", "/replay-viewer.sh",
+    last_stderr = ""
+
+    # Prefer the inline launcher for consistent behavior across image versions.
+    inline_result, inline_mode = _start_replay_viewer_inline(
+        image=image,
+        container_replay_path=container_replay_path,
+        port=port,
+        local_file=local_file,
+        settings=settings,
+    )
+    if inline_result.returncode == 0:
+        info("Using inline replay viewer launcher.")
+        if inline_mode.startswith("gpu"):
+            info(f"Rendering mode: {inline_mode} (hardware acceleration)")
+        else:
+            warn("Rendering mode: cpu (software fallback)")
+        success("Replay viewer started.")
+        return True
+
+    stderr = inline_result.stderr.strip()
+    if _is_name_conflict_error(stderr, REPLAY_CONTAINER):
+        step("Replay viewer container name is in use; removing stale container and retrying...")
+        remove = _run(["docker", "rm", "-f", REPLAY_CONTAINER])
+        if remove.returncode != 0:
+            error(f"Failed to remove conflicting replay viewer container: {remove.stderr.strip()}")
+            return False
+        inline_result, inline_mode = _start_replay_viewer_inline(
+            image=image,
+            container_replay_path=container_replay_path,
+            port=port,
+            local_file=local_file,
+            settings=settings,
+        )
+        if inline_result.returncode == 0:
+            info("Using inline replay viewer launcher.")
+            if inline_mode.startswith("gpu"):
+                info(f"Rendering mode: {inline_mode} (hardware acceleration)")
+            else:
+                warn("Rendering mode: cpu (software fallback)")
+            success("Replay viewer started.")
+            return True
+        stderr = inline_result.stderr.strip()
+
+    last_stderr = stderr
+    _run(["docker", "rm", "-f", REPLAY_CONTAINER])
+    warn("Inline replay launcher failed; trying image entrypoints...")
+
+    # Support multiple image layouts across released tags.
+    entrypoint_candidates = [
+        "/replay-viewer.sh",
+        "/app/replay-viewer.sh",
+        "/app/docker/replay-viewer.sh",
+        "/docker/replay-viewer.sh",
     ]
 
-    if local_file:
-        # Mount the local replay file
-        cmd.extend(["-v", f"{local_file}:{container_replay_path}:ro"])
-    elif is_running():
-        # Share replay volume from game server container
-        cmd.extend(["--volumes-from", CONTAINER_NAME])
+    for idx, entrypoint in enumerate(entrypoint_candidates):
+        pre_image_cmd = [
+            "docker", "run", "-d",
+            "-p", f"{port}:6080",
+            "--name", REPLAY_CONTAINER,
+            "--entrypoint", entrypoint,
+        ]
+        pre_image_cmd.extend(_common_replay_env_args(settings))
 
-    cmd.extend([image, container_replay_path])
+        if local_file:
+            # Mount the local replay file
+            pre_image_cmd.extend(["-v", f"{local_file}:{container_replay_path}:ro"])
+        elif is_running():
+            # Share replay volume from game server container
+            pre_image_cmd.extend(["--volumes-from", CONTAINER_NAME])
 
-    result = _run(cmd)
-    if result.returncode != 0:
-        error(f"Failed to start replay viewer: {result.stderr.strip()}")
+        image_and_args = [image, container_replay_path]
+
+        result, render_mode = _run_replay_container(
+            pre_image_cmd,
+            image_and_args,
+            settings.render_mode,
+        )
+        if result.returncode == 0:
+            if idx > 0:
+                info(f"Using replay viewer entrypoint: {entrypoint}")
+            if render_mode.startswith("gpu"):
+                info(f"Rendering mode: {render_mode} (hardware acceleration)")
+            else:
+                warn("Rendering mode: cpu (software fallback)")
+            success("Replay viewer started.")
+            return True
+
+        stderr = result.stderr.strip()
+        if _is_name_conflict_error(stderr, REPLAY_CONTAINER):
+            step("Replay viewer container name is in use; removing stale container and retrying...")
+            remove = _run(["docker", "rm", "-f", REPLAY_CONTAINER])
+            if remove.returncode != 0:
+                error(f"Failed to remove conflicting replay viewer container: {remove.stderr.strip()}")
+                return False
+            result, render_mode = _run_replay_container(
+                pre_image_cmd,
+                image_and_args,
+                settings.render_mode,
+            )
+            if result.returncode == 0:
+                if idx > 0:
+                    info(f"Using replay viewer entrypoint: {entrypoint}")
+                if render_mode.startswith("gpu"):
+                    info(f"Rendering mode: {render_mode} (hardware acceleration)")
+                else:
+                    warn("Rendering mode: cpu (software fallback)")
+                success("Replay viewer started.")
+                return True
+            stderr = result.stderr.strip()
+
+        last_stderr = stderr
+        # A failed `docker run` may leave an exited container with the same name.
+        _run(["docker", "rm", "-f", REPLAY_CONTAINER])
+        if _is_missing_entrypoint_error(stderr, entrypoint):
+            continue
+
+        error(f"Failed to start replay viewer: {stderr}")
         return False
 
-    success("Replay viewer started.")
-    return True
+    warn(
+        "Replay viewer entrypoint not found in image after inline fallback; tried: "
+        + ", ".join(entrypoint_candidates)
+    )
+    if not _refreshed_latest and (version in (None, "latest")):
+        warn("Replay viewer failed on local 'latest' image. Pulling fresh image and retrying once...")
+        if pull_image("latest"):
+            return start_replay_viewer(
+                replay_path=replay_path,
+                port=port,
+                version="latest",
+                settings=settings,
+                _refreshed_latest=True,
+            )
+    if last_stderr:
+        error(f"Failed to start replay viewer: {last_stderr}")
+    else:
+        error("Failed to start replay viewer.")
+    return False
 
 
 def stop_replay_viewer() -> bool:
     """Stop the replay viewer container."""
-    if not is_replay_viewer_running():
+    if not replay_viewer_exists():
         info("Replay viewer is not running.")
         return True
     step("Stopping replay viewer...")
-    result = _run(["docker", "stop", REPLAY_CONTAINER])
+    result = _run(["docker", "rm", "-f", REPLAY_CONTAINER])
     if result.returncode != 0:
         error(f"Failed to stop replay viewer: {result.stderr.strip()}")
         return False

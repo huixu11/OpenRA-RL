@@ -270,6 +270,70 @@ The replay viewer runs inside Docker using the same engine that recorded the gam
 
 > **Version tracking:** Each replay records which Docker image version was used. When you upgrade, old replays are still viewable using their original engine version.
 
+You can tune replay viewer quality/performance directly from CLI flags:
+
+```bash
+openra-rl replay watch \
+  --resolution 1280x720 \
+  --fps 4 \
+  --ui-scale 0.9 \
+  --vnc-quality 9 \
+  --vnc-compression 2 \
+  --render gpu
+```
+
+The same settings can be set via environment variables:
+
+```bash
+OPENRA_RL_REPLAY_RESOLUTION=1280x720 \
+OPENRA_RL_REPLAY_MAX_FPS=4 \
+OPENRA_RL_REPLAY_UI_SCALE=0.9 \
+OPENRA_RL_REPLAY_VNC_QUALITY=9 \
+OPENRA_RL_REPLAY_VNC_COMPRESSION=2 \
+OPENRA_RL_REPLAY_RENDER=auto \
+openra-rl replay watch
+```
+
+Replay tuning environment variables:
+
+| Variable | Default | Description |
+|---------|---------|-------------|
+| `OPENRA_RL_REPLAY_RESOLUTION` | `960x540` | Replay render resolution (`WxH`) |
+| `OPENRA_RL_REPLAY_MAX_FPS` | `2` | Replay render FPS cap |
+| `OPENRA_RL_REPLAY_UI_SCALE` | `0.75` | OpenRA UI scale |
+| `OPENRA_RL_REPLAY_VNC_QUALITY` | `8` | noVNC quality (`0-9`) |
+| `OPENRA_RL_REPLAY_VNC_COMPRESSION` | `4` | noVNC compression (`0-9`) |
+| `OPENRA_RL_REPLAY_RENDER` | `auto` | Render mode: `auto`, `gpu`, `cpu` |
+| `OPENRA_RL_REPLAY_VIEWPORT_DISTANCE` | `close` | Camera distance: `close`, `medium`, `far` |
+| `OPENRA_RL_REPLAY_MUTE` | `true` | Mute replay audio (`true`/`false`) |
+| `OPENRA_RL_REPLAY_XVFB_DEPTH` | `24` | Xvfb color depth |
+
+Recommended presets:
+
+- Clarity-first (sharper image, still reasonably smooth):
+
+```bash
+openra-rl replay watch \
+  --resolution 1280x720 \
+  --fps 4 \
+  --ui-scale 0.9 \
+  --vnc-quality 9 \
+  --vnc-compression 2 \
+  --render gpu
+```
+
+- Speed-first (faster playback, lower visual quality):
+
+```bash
+openra-rl replay watch \
+  --resolution 960x540 \
+  --fps 2 \
+  --ui-scale 0.75 \
+  --vnc-quality 6 \
+  --vnc-compression 7 \
+  --render auto
+```
+
 ## Local Development (without Docker)
 
 For running the game server natively (macOS/Linux):
