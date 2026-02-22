@@ -1,14 +1,10 @@
 """Tests for the openra-rl CLI package."""
 
-import os
 import subprocess
-import sys
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-import yaml
 
 
 # ── Console ─────────────────────────────────────────────────────────
@@ -115,7 +111,7 @@ class TestDockerManager:
 
     @patch("openra_env.cli.docker_manager._run")
     def test_server_status_not_running(self, mock_run):
-        from openra_env.cli.docker_manager import server_status, is_running
+        from openra_env.cli.docker_manager import server_status
         with patch("openra_env.cli.docker_manager.is_running", return_value=False):
             assert server_status() is None
 
@@ -137,6 +133,91 @@ class TestDockerManager:
     def test_container_name(self):
         from openra_env.cli.docker_manager import CONTAINER_NAME
         assert CONTAINER_NAME == "openra-rl-server"
+
+    def test_load_replay_viewer_settings_defaults(self, monkeypatch):
+        from openra_env.cli.docker_manager import load_replay_viewer_settings
+
+        for key in [
+            "OPENRA_RL_REPLAY_RESOLUTION",
+            "OPENRA_RL_REPLAY_MAX_FPS",
+            "OPENRA_RL_REPLAY_UI_SCALE",
+            "OPENRA_RL_REPLAY_VNC_QUALITY",
+            "OPENRA_RL_REPLAY_VNC_COMPRESSION",
+            "OPENRA_RL_REPLAY_RENDER",
+            "OPENRA_RL_REPLAY_VIEWPORT_DISTANCE",
+            "OPENRA_RL_REPLAY_XVFB_DEPTH",
+            "OPENRA_RL_REPLAY_MUTE",
+        ]:
+            monkeypatch.delenv(key, raising=False)
+
+        settings = load_replay_viewer_settings()
+        assert settings.width == 960
+        assert settings.height == 540
+        assert settings.max_fps == 2
+        assert settings.ui_scale == 0.75
+        assert settings.vnc_quality == 8
+        assert settings.vnc_compression == 4
+        assert settings.render_mode == "auto"
+        assert settings.viewport_distance == "Close"
+        assert settings.xvfb_depth == 24
+        assert settings.mute is True
+
+    def test_load_replay_viewer_settings_env_overrides(self, monkeypatch):
+        from openra_env.cli.docker_manager import load_replay_viewer_settings
+
+        monkeypatch.setenv("OPENRA_RL_REPLAY_RESOLUTION", "1280x720")
+        monkeypatch.setenv("OPENRA_RL_REPLAY_MAX_FPS", "15")
+        monkeypatch.setenv("OPENRA_RL_REPLAY_UI_SCALE", "1.2")
+        monkeypatch.setenv("OPENRA_RL_REPLAY_VNC_QUALITY", "9")
+        monkeypatch.setenv("OPENRA_RL_REPLAY_VNC_COMPRESSION", "2")
+        monkeypatch.setenv("OPENRA_RL_REPLAY_RENDER", "cpu")
+        monkeypatch.setenv("OPENRA_RL_REPLAY_VIEWPORT_DISTANCE", "far")
+        monkeypatch.setenv("OPENRA_RL_REPLAY_XVFB_DEPTH", "16")
+        monkeypatch.setenv("OPENRA_RL_REPLAY_MUTE", "false")
+
+        settings = load_replay_viewer_settings()
+        assert settings.width == 1280
+        assert settings.height == 720
+        assert settings.max_fps == 15
+        assert settings.ui_scale == 1.2
+        assert settings.vnc_quality == 9
+        assert settings.vnc_compression == 2
+        assert settings.render_mode == "cpu"
+        assert settings.viewport_distance == "Far"
+        assert settings.xvfb_depth == 16
+        assert settings.mute is False
+
+    def test_load_replay_viewer_settings_invalid_resolution(self):
+        from openra_env.cli.docker_manager import load_replay_viewer_settings
+
+        with pytest.raises(ValueError):
+            load_replay_viewer_settings(resolution="bad")
+
+    @patch("openra_env.cli.docker_manager._render_variants")
+    @patch("openra_env.cli.docker_manager._run")
+    def test_run_replay_container_falls_back_to_cpu(self, mock_run, mock_variants):
+        from openra_env.cli.docker_manager import _run_replay_container
+
+        mock_variants.return_value = [
+            ("gpu-test", ["--gpus", "all"]),
+            ("cpu", ["-e", "LIBGL_ALWAYS_SOFTWARE=1"]),
+        ]
+        mock_run.side_effect = [
+            subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="gpu unavailable"),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+            subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=""),
+        ]
+
+        result, mode = _run_replay_container(
+            pre_image_cmd=["docker", "run", "-d"],
+            image_and_args=["ghcr.io/yxc20089/openra-rl:latest"],
+            render_mode="auto",
+        )
+
+        assert result.returncode == 0
+        assert mode == "cpu"
+        assert "--gpus" in mock_run.call_args_list[0].args[0]
+        assert "LIBGL_ALWAYS_SOFTWARE=1" in mock_run.call_args_list[2].args[0]
 
 
 # ── Wizard ──────────────────────────────────────────────────────────
@@ -251,6 +332,19 @@ class TestCommands:
         with pytest.raises(SystemExit):
             cmd_play()
 
+    @patch("openra_env.cli.commands.docker")
+    def test_cmd_replay_watch_invalid_setting(self, mock_docker):
+        from openra_env.cli.commands import cmd_replay_watch
+
+        mock_docker.check_docker.return_value = True
+        mock_docker.load_replay_viewer_settings.side_effect = ValueError("invalid")
+
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_replay_watch(resolution="bad")
+
+        assert exc_info.value.code == 1
+        mock_docker.start_replay_viewer.assert_not_called()
+
 
 # ── Main Entry Point ───────────────────────────────────────────────
 
@@ -338,6 +432,43 @@ class TestMain:
         with patch("sys.argv", ["openra-rl", "mcp-server", "--port", "9000"]):
             main()
         mock_mcp.assert_called_once_with(server_url=None, port=9000)
+
+    @patch("openra_env.cli.commands.cmd_replay_watch")
+    def test_main_replay_watch_with_tuning_flags(self, mock_watch):
+        from openra_env.cli.main import main
+
+        with patch("sys.argv", [
+            "openra-rl",
+            "replay",
+            "watch",
+            "demo.orarep",
+            "--port",
+            "6090",
+            "--resolution",
+            "1280x720",
+            "--fps",
+            "10",
+            "--ui-scale",
+            "1.25",
+            "--vnc-quality",
+            "9",
+            "--vnc-compression",
+            "2",
+            "--render",
+            "gpu",
+        ]):
+            main()
+
+        mock_watch.assert_called_once_with(
+            file="demo.orarep",
+            port=6090,
+            resolution="1280x720",
+            fps=10,
+            ui_scale=1.25,
+            vnc_quality=9,
+            vnc_compression=2,
+            render_mode="gpu",
+        )
 
 
 # ── MCP Server ──────────────────────────────────────────────────────

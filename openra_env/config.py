@@ -17,6 +17,7 @@ from typing import Optional
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
+import locale
 
 
 # ── Pydantic Config Models ────────────────────────────────────────────
@@ -270,6 +271,26 @@ def _coerce_value(value: str) -> object:
     return value
 
 
+def _load_yaml_dict(path: str) -> dict:
+    """Load YAML from *path* with UTF-8 first, then locale fallback."""
+    encodings = ["utf-8-sig"]
+    preferred = locale.getpreferredencoding(False)
+    if preferred and preferred.lower() not in {"utf-8", "utf_8", "utf-8-sig"}:
+        encodings.append(preferred)
+
+    last_error: Optional[UnicodeDecodeError] = None
+    for encoding in encodings:
+        try:
+            with open(path, encoding=encoding) as f:
+                return yaml.safe_load(f) or {}
+        except UnicodeDecodeError as exc:
+            last_error = exc
+
+    if last_error is not None:
+        raise last_error
+    return {}
+
+
 def should_register_tool(tool_name: str, tools_config: ToolsConfig) -> bool:
     """Return True if *tool_name* should be registered based on config."""
     if tool_name in tools_config.disabled:
@@ -308,8 +329,7 @@ def load_config(
     # 1. Load YAML file
     resolved_path = _resolve_config_path(config_path)
     if resolved_path is not None:
-        with open(resolved_path) as f:
-            file_dict = yaml.safe_load(f) or {}
+        file_dict = _load_yaml_dict(resolved_path)
         _deep_merge(config_dict, file_dict)
 
     # 2. Apply programmatic overrides (e.g. constructor args)
