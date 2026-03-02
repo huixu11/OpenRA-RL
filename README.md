@@ -14,17 +14,32 @@ datasets: []
 pinned: false
 ---
 
-# OpenRA-RL
+<p align="center">
+  <a href="https://openra-rl.dev">
+    <img src="docs/banner.png" alt="OpenRA-RL — Command AI To Play Red Alert" width="100%">
+  </a>
+</p>
 
-Play [Red Alert](https://www.openra.net/) with AI agents. LLMs, scripted bots, or RL — your agent commands armies in the classic RTS through a Python API.
+<p align="center">
+  <b>Play <a href="https://www.openra.net/">Red Alert</a> with AI agents. LLMs, scripted bots, or RL — your agent commands armies in the classic RTS through a Python API.</b>
+</p>
 
-```
-┌──────────────────┐       HTTP / WS :8000       ┌──────────────────────────────┐
-│   Your Agent     │  ◄────────────────────────►  │  OpenRA-RL Server (Docker)   │
-│                  │       gRPC :9999             │  FastAPI + gRPC bridge       │
-│  LLM / Bot / RL  │  ◄────────────────────────►  │  OpenRA engine (headless)    │
-└──────────────────┘                              └──────────────────────────────┘
-```
+<p align="center">
+  <a href="https://pypi.org/project/openra-rl/"><img src="https://img.shields.io/pypi/v/openra-rl?color=red" alt="PyPI"></a>
+  <a href="https://pypi.org/project/openra-rl/"><img src="https://img.shields.io/pypi/pyversions/openra-rl" alt="Python"></a>
+  <a href="https://github.com/yxc20089/OpenRA-RL/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/yxc20089/OpenRA-RL/ci.yml?label=tests" alt="CI"></a>
+  <a href="https://github.com/yxc20089/OpenRA-RL/blob/main/LICENSE"><img src="https://img.shields.io/github/license/yxc20089/OpenRA-RL" alt="License"></a>
+</p>
+
+<p align="center">
+  <a href="https://openra-rl.dev">Website</a> &bull;
+  <a href="https://huggingface.co/spaces/openra-rl/OpenRA-Bench">Leaderboard</a> &bull;
+  <a href="https://huggingface.co/spaces/openra-rl/OpenRA-RL">HuggingFace</a> &bull;
+  <a href="https://openra-rl.dev/docs/intro">Docs</a> &bull;
+  <a href="https://github.com/yxc20089/OpenRA-RL/issues">Issues</a>
+</p>
+
+---
 
 ## Quick Start
 
@@ -104,6 +119,15 @@ Then chat: _"Start a game of Red Alert on easy difficulty, build a base, and def
 **Data flow:** Agent <-> FastAPI (port 8000) <-> gRPC bridge (port 9999) <-> OpenRA game engine
 
 The game runs at ~25 ticks/sec independent of agent speed. Observations use a DropOldest channel so the agent always sees the latest game state, even if it's slower than real time.
+
+<details>
+<summary>Full architecture diagram</summary>
+
+<p align="center">
+  <img src="docs/architecture.png" alt="OpenRA-RL System Architecture" width="800">
+</p>
+
+</details>
 
 ## Example Agents
 
@@ -473,6 +497,18 @@ OpenRA-RL/
 ├── Dockerfile                  # Game server image
 └── Dockerfile.agent            # Lightweight agent image
 ```
+
+## Ecosystem
+
+| Repository | Description |
+|------------|-------------|
+| [OpenRA-RL](https://github.com/yxc20089/OpenRA-RL) | Python environment, agents, MCP server (this repo) |
+| [OpenRA](https://github.com/yxc20089/OpenRA) | Modified C# game engine with gRPC bridge |
+| [OpenRA-Bench](https://github.com/yxc20089/OpenRA-Bench) | Leaderboard & benchmark ([live](https://huggingface.co/spaces/openra-rl/OpenRA-Bench)) |
+| [OpenRA-RL-Util](https://github.com/yxc20089/OpenRA-RL-Util) | Shared utilities — reward vectors, damage matrices, rubrics |
+| [OpenRA-RL-Training](https://github.com/yxc20089/OpenRA-RL-Training) | Scenario system, curriculum, GRPO training engine |
+| [OpenRA-RL-Website](https://github.com/yxc20089/OpenRA-RL-Website) | Documentation site ([openra-rl.dev](https://openra-rl.dev)) |
+| [OpenEnv](https://github.com/OpenEnvs/OpenEnv) | Gymnasium-style environment framework |
 
 ## License
 
