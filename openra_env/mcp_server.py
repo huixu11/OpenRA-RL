@@ -122,7 +122,7 @@ async def get_game_state() -> str:
 
 @mcp.tool()
 async def advance(
-    ticks: Annotated[int, Field(description="Number of game ticks to advance (~25 ticks = 1 game-second). Range 1-500. Use 100-200 for movement, 300-750 for building construction.")] = 50,
+    ticks: Annotated[int, Field(description="Number of game ticks to advance (~25 ticks = 1 game-second). Range 1-5000. Use 100-200 for movement, 300-750 for building construction.")] = 50,
 ) -> str:
     """Advance the game by N ticks at accelerated speed (~25 ticks = 1 game-second).
     Production, movement, combat, and auto-placement all require game time.

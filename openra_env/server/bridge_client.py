@@ -177,6 +177,8 @@ class BridgeClient:
         while self._obs_tick <= current_tick:
             self._check_reader_alive()
             self._obs_event.clear()
+            if self._obs_tick > current_tick:
+                break
             await asyncio.wait_for(self._obs_event.wait(), timeout=self.timeout_s)
 
         return self._latest_obs
@@ -190,10 +192,12 @@ class BridgeClient:
         target_tick = self._obs_tick + n
         while self._obs_tick < target_tick:
             self._check_reader_alive()
-            self._obs_event.clear()
-            await asyncio.wait_for(self._obs_event.wait(), timeout=self.timeout_s)
             if self._latest_obs and self._latest_obs.done:
                 break
+            self._obs_event.clear()
+            if self._obs_tick >= target_tick:
+                break
+            await asyncio.wait_for(self._obs_event.wait(), timeout=self.timeout_s)
         return self._latest_obs
 
     async def fast_advance(self, n: int) -> rl_bridge_pb2.GameObservation:
@@ -222,10 +226,12 @@ class BridgeClient:
         # Wait for the game to reach the target tick
         while self._obs_tick < target_tick:
             self._check_reader_alive()
-            self._obs_event.clear()
-            await asyncio.wait_for(self._obs_event.wait(), timeout=self.timeout_s)
             if self._latest_obs and self._latest_obs.done:
                 break
+            self._obs_event.clear()
+            if self._obs_tick >= target_tick:
+                break
+            await asyncio.wait_for(self._obs_event.wait(), timeout=self.timeout_s)
         return self._latest_obs
 
     async def observe(self) -> Optional[rl_bridge_pb2.GameObservation]:
